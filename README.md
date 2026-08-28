@@ -18,6 +18,9 @@ Hệ thống điểm danh sinh viên bằng nhận diện khuôn mặt, chạy t
 - Khu vực quản trị bằng PIN PBKDF2; tạm khóa sau nhiều lần đăng nhập sai.
 - Xuất báo cáo CSV UTF-8 tương thích Excel.
 - Audit log cho các thao tác quan trọng.
+- API FastAPI có health check, danh sách buổi học và nghiệp vụ điểm danh.
+- Chính sách retention cho embedding và tác vụ xóa dữ liệu quá hạn.
+- Unit test cho matcher/liveness, smoke test API và CI bằng GitHub Actions.
 
 ## Công nghệ
 
@@ -28,6 +31,8 @@ Hệ thống điểm danh sinh viên bằng nhận diện khuôn mặt, chạy t
 | Computer vision | OpenCV, face-recognition/dlib |
 | Dữ liệu | SQLite, Pandas, NumPy |
 | Bảo mật PIN | PBKDF2-HMAC-SHA256 |
+| API | FastAPI, Pydantic |
+| Chất lượng | Pytest, GitHub Actions, Docker |
 
 ## Kiến trúc
 
@@ -41,8 +46,15 @@ Face_Attendance_System/
 │   ├── config.py       # cấu hình và kiểm tra biến môi trường
 │   ├── utils.py        # thời gian, chuẩn hóa input, mã hóa PIN
 │   ├── database.py     # schema, repository và nghiệp vụ điểm danh
-│   ├── recognition.py  # enrollment, matching, liveness, video processor
+│   ├── recognition.py  # enrollment và video processor
+│   ├── matcher.py      # unknown rejection và Top-1/Top-2 margin
+│   ├── liveness.py     # máy trạng thái chớp mắt
+│   ├── api.py          # REST API
 │   └── ui.py           # các trang Streamlit
+├── tests/
+├── data/README.md
+├── Dockerfile
+└── .github/workflows/ci.yml
 ```
 
 Luồng điểm danh:
@@ -97,10 +109,12 @@ Sao chép `.env.example` thành `.env`, hoặc thiết lập biến môi trườ
 | Biến | Mặc định | Ý nghĩa |
 |---|---:|---|
 | `FACE_ATTENDANCE_DATA_DIR` | `./face_attendance_data` | Nơi lưu SQLite |
+| `FACE_ATTENDANCE_API_KEY` | không có | Khóa bí mật bắt buộc cho API ghi điểm danh |
 | `FACE_TOLERANCE` | `0.50` | Face distance tối đa để chấp nhận |
 | `MIN_IDENTITY_MARGIN` | `0.05` | Chênh lệch tối thiểu giữa Top-1 và Top-2 |
 | `PROCESS_EVERY_N_FRAMES` | `3` | Tần suất xử lý khung hình |
 | `CONFIRMATION_FRAMES` | `3` | Số frame liên tiếp để xác nhận |
+| `BIOMETRIC_RETENTION_DAYS` | `365` | Thời hạn lưu embedding |
 
 Không nên giảm tolerance hoặc thay đổi margin tùy ý. Hãy hiệu chỉnh bằng tập validation đại diện cho camera, ánh sáng và người dùng thực tế.
 
@@ -110,6 +124,14 @@ Không nên giảm tolerance hoặc thay đổi margin tùy ý. Hãy hiệu ch�
 streamlit run app.py
 ```
 
+Chạy API ở terminal khác:
+
+```powershell
+uvicorn face_attendance.api:app --reload
+```
+
+Swagger UI có tại `http://127.0.0.1:8000/docs`.
+
 Lần chạy đầu tiên:
 
 1. Mở trang **Quản trị** và tạo PIN 6–12 chữ số.
@@ -118,10 +140,14 @@ Lần chạy đầu tiên:
 4. Tạo buổi học, chọn **Mở điểm danh**.
 5. Sang trang **Điểm danh**, chọn buổi học và cho phép camera.
 
-## Kiểm tra cú pháp
+## Kiểm thử và Docker
 
 ```powershell
-python -m compileall app.py src
+pip install -e ".[dev]"
+python -m compileall app.py src tests
+pytest -q
+docker build -t face-attendance-system .
+docker run --rm -p 8501:8501 face-attendance-system
 ```
 
 ## Mô hình dữ liệu

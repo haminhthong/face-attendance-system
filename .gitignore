@@ -136,6 +136,12 @@ ENV/
 env.bak/
 venv.bak/
 
+# Dữ liệu sinh trắc học và cơ sở dữ liệu cục bộ
+face_attendance_data/
+*.db
+*.db-shm
+*.db-wal
+
 # Spyder project settings
 .spyderproject
 .spyproject

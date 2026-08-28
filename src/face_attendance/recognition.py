@@ -29,6 +29,8 @@ from .config import (
     PROCESS_EVERY_N_FRAMES,
 )
 from .database import get_connection, mark_attendance, save_embedding, upsert_student
+from .liveness import BoKiemTraChopMat, ti_le_mat
+from .matcher import tim_danh_tinh_tot_nhat
 from .utils import utc_iso
 
 LOGGER = logging.getLogger(__name__)
@@ -184,34 +186,16 @@ def load_templates(session_id: int | None = None) -> list[FaceTemplate]:
             )
     return templates
 
-def euclidean_distance(point_a: np.ndarray, point_b: np.ndarray) -> float:
-    return float(np.linalg.norm(point_a - point_b))
-
-def eye_aspect_ratio(points: list[tuple[int, int]]) -> float | None:
-    if len(points) != 6:
-        return None
-    values = np.asarray(points, dtype=np.float64)
-    vertical_1 = euclidean_distance(values[1], values[5])
-    vertical_2 = euclidean_distance(values[2], values[4])
-    horizontal = euclidean_distance(values[0], values[3])
-    if horizontal <= 1e-6:
-        return None
-    return (vertical_1 + vertical_2) / (2.0 * horizontal)
-
 class RecognitionEngine:
     def __init__(self, session_id: int, require_blink: bool) -> None:
         self.session_id = session_id
         self.require_blink = require_blink
         self.templates = load_templates(session_id)
-        self.known_matrix = (
-            np.vstack([template.embedding for template in self.templates])
-            if self.templates
-            else np.empty((0, 128), dtype=np.float64)
-        )
         self.frame_number = 0
         self.confirm_counts: dict[int, int] = {}
-        self.blink_states: dict[int, str] = {}
-        self.blink_verified_at: dict[int, float] = {}
+        self.blink_checker = BoKiemTraChopMat(
+            BLINK_EAR_CLOSED, BLINK_EAR_OPEN, BLINK_VERIFICATION_SECONDS
+        )
         self.last_attempt: dict[int, float] = {}
         self.last_event = "Đang chờ khuôn mặt..."
         self.last_event_type = "info"
@@ -234,47 +218,21 @@ class RecognitionEngine:
     ) -> tuple[FaceTemplate | None, float, float]:
         if not self.templates:
             return None, float("inf"), float("inf")
-        distances = face_recognition.face_distance(self.known_matrix, encoding)
-
-        # Chọn ảnh gần nhất của từng sinh viên trước khi so sánh hai ứng viên đầu.
-        by_student: dict[int, tuple[float, FaceTemplate]] = {}
-        for distance, template in zip(distances, self.templates):
-            current = by_student.get(template.student_id)
-            if current is None or float(distance) < current[0]:
-                by_student[template.student_id] = (float(distance), template)
-        ranked = sorted(by_student.values(), key=lambda item: item[0])
-        best_distance, best_template = ranked[0]
-        second_distance = ranked[1][0] if len(ranked) > 1 else float("inf")
-        margin = second_distance - best_distance
-        if best_distance > FACE_TOLERANCE or margin < MIN_IDENTITY_MARGIN:
-            return None, best_distance, margin
-        return best_template, best_distance, margin
+        result = tim_danh_tinh_tot_nhat(
+            encoding, self.templates, FACE_TOLERANCE, MIN_IDENTITY_MARGIN
+        )
+        return result.mau, result.khoang_cach, result.do_phan_biet
 
     def update_blink(self, student_id: int, landmarks: dict[str, Any] | None) -> bool:
         if not self.require_blink:
             return True
         if not landmarks:
             return False
-        left = eye_aspect_ratio(landmarks.get("left_eye", []))
-        right = eye_aspect_ratio(landmarks.get("right_eye", []))
+        left = ti_le_mat(landmarks.get("left_eye", []))
+        right = ti_le_mat(landmarks.get("right_eye", []))
         if left is None or right is None:
             return False
-        ear = (left + right) / 2.0
-        state = self.blink_states.get(student_id, "need_open")
-        if state == "verified":
-            verified_at = self.blink_verified_at.get(student_id, 0.0)
-            if time.monotonic() - verified_at <= BLINK_VERIFICATION_SECONDS:
-                return True
-            state = "need_open"
-        if state == "need_open" and ear >= BLINK_EAR_OPEN:
-            state = "need_closed"
-        elif state == "need_closed" and ear <= BLINK_EAR_CLOSED:
-            state = "need_reopen"
-        elif state == "need_reopen" and ear >= BLINK_EAR_OPEN:
-            state = "verified"
-            self.blink_verified_at[student_id] = time.monotonic()
-        self.blink_states[student_id] = state
-        return state == "verified"
+        return self.blink_checker.cap_nhat(student_id, (left + right) / 2.0)
 
     def draw_annotations(self, image_bgr: np.ndarray) -> np.ndarray:
         for top, right, bottom, left, color, label in self.last_annotations:
@@ -330,8 +288,7 @@ class RecognitionEngine:
         for student_id in list(self.confirm_counts):
             if student_id not in seen_students:
                 self.confirm_counts[student_id] = 0
-                self.blink_states.pop(student_id, None)
-                self.blink_verified_at.pop(student_id, None)
+                self.blink_checker.dat_lai(student_id)
         live_students = {
             observation["template"].student_id
             for observation in observations

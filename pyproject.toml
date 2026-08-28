@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "face-attendance-system"
-version = "1.0.0"
+version = "1.1.0"
 description = "Student attendance system using face recognition, WebRTC and SQLite"
 requires-python = ">=3.11"
 dependencies = [
@@ -15,10 +15,19 @@ dependencies = [
   "face-recognition>=1.3,<2",
   "numpy>=1.26,<3",
   "pandas>=2.2,<3",
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.30,<1",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9", "httpx>=0.27,<1"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

@@ -7,7 +7,7 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
-from .config import DB_PATH, FACE_TOLERANCE
+from .config import BIOMETRIC_RETENTION_DAYS, DB_PATH, FACE_TOLERANCE
 from .utils import (
     display_datetime,
     normalize_course_code,
@@ -278,6 +278,31 @@ def remove_student_biometrics(student_id: int) -> None:
             (utc_iso(), student_id),
         )
         audit(connection, "student_biometrics_removed", f"student_id={student_id}")
+
+
+def purge_expired_biometrics(retention_days: int = BIOMETRIC_RETENTION_DAYS) -> int:
+    """Xóa embedding quá hạn và vô hiệu hóa hồ sơ không còn embedding."""
+    if not 1 <= retention_days <= 3650:
+        raise ValueError("Thời hạn lưu trữ phải nằm trong khoảng 1-3650 ngày.")
+    cutoff = utc_iso(utc_now() - timedelta(days=retention_days))
+    with get_connection() as connection:
+        cursor = connection.execute(
+            "DELETE FROM face_embeddings WHERE created_at_utc < ?", (cutoff,)
+        )
+        deleted = max(0, int(cursor.rowcount))
+        connection.execute(
+            """
+            UPDATE students
+            SET active = 0, updated_at_utc = ?
+            WHERE active = 1
+              AND NOT EXISTS (
+                  SELECT 1 FROM face_embeddings fe WHERE fe.student_id = students.id
+              )
+            """,
+            (utc_iso(),),
+        )
+        audit(connection, "expired_biometrics_purged", f"deleted={deleted}")
+        return deleted
 
 def create_course(course_code: str, course_name: str, lecturer: str) -> None:
     code = normalize_course_code(course_code)

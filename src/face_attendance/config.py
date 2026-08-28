@@ -6,6 +6,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 APP_TITLE = "Hệ thống Điểm danh Sinh viên bằng Khuôn mặt"
+API_KEY = os.getenv("FACE_ATTENDANCE_API_KEY", "").strip()
 VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 BASE_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(
@@ -50,6 +51,7 @@ BLINK_EAR_CLOSED = 0.19
 BLINK_EAR_OPEN = 0.23
 BLINK_VERIFICATION_SECONDS = 10.0
 ATTEMPT_COOLDOWN_SECONDS = 8.0
+BIOMETRIC_RETENTION_DAYS = _env_int("BIOMETRIC_RETENTION_DAYS", 365, 1, 3650)
 PIN_ITERATIONS = 240_000
 
 STUDENT_CODE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{3,30}$")
