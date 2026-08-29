@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 import numpy as np
+import pytest
 
 from face_attendance.matcher import tim_danh_tinh_tot_nhat
 
@@ -23,3 +24,10 @@ def test_matcher_rejects_ambiguous_identity() -> None:
     samples = [Mau(1, np.full(128, 0.01)), Mau(2, np.full(128, 0.011))]
     result = tim_danh_tinh_tot_nhat(query, samples, 0.5, 0.05)
     assert result.mau is None
+
+
+def test_matcher_rejects_invalid_template() -> None:
+    with pytest.raises(ValueError, match="Embedding mẫu"):
+        tim_danh_tinh_tot_nhat(
+            np.zeros(128), [Mau(1, np.zeros(127))], 0.5, 0.05
+        )

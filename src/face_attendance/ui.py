@@ -188,7 +188,11 @@ def render_student_management() -> None:
     st.divider()
     st.subheader("Danh sách sinh viên")
     students = student_table()
-    st.dataframe(students.drop(columns=["id"], errors="ignore"), hide_index=True, use_container_width=True)
+    st.dataframe(
+        students.drop(columns=["id"], errors="ignore"),
+        hide_index=True,
+        use_container_width=True,
+    )
     if not students.empty:
         option_map = {
             f"{row['MSSV']} - {row['Họ tên']}": int(row["id"])

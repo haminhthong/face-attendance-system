@@ -27,8 +27,14 @@ class BoKiemTraChopMat:
     trang_thai: dict[int, str] = field(default_factory=dict)
     da_xac_minh_luc: dict[int, float] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if not 0 < self.nguong_nham < self.nguong_mo < 1:
+            raise ValueError("Ngưỡng nhắm mắt phải nhỏ hơn ngưỡng mở mắt.")
+        if self.thoi_han_giay <= 0:
+            raise ValueError("Thời hạn xác minh phải lớn hơn 0 giây.")
+
     def cap_nhat(self, student_id: int, ti_le: float | None) -> bool:
-        if ti_le is None:
+        if ti_le is None or not np.isfinite(ti_le) or ti_le < 0:
             return False
         luc_nay = time.monotonic()
         trang_thai = self.trang_thai.get(student_id, "can_mo")

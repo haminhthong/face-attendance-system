@@ -3,16 +3,23 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 import hmac
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from .config import API_KEY
-from .database import attendance_report, init_database, list_sessions, mark_attendance
+from .database import (
+    attendance_report,
+    init_database,
+    list_sessions,
+    mark_attendance,
+    purge_expired_biometrics,
+)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_database()
+    purge_expired_biometrics()
     yield
 
 
@@ -30,35 +37,41 @@ class YeuCauDiemDanh(BaseModel):
     recognition_distance: float = Field(ge=0, le=1)
 
 
+def xac_thuc_api_key(x_api_key: str | None = Header(default=None)) -> None:
+    """Bảo vệ dữ liệu điểm danh và thông tin sinh viên bằng khóa API."""
+    if not API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="API chưa được bật vì chưa cấu hình khóa truy cập.",
+        )
+    if x_api_key is None or not hmac.compare_digest(x_api_key, API_KEY):
+        raise HTTPException(status_code=401, detail="Khóa API không hợp lệ.")
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/sessions")
-def sessions() -> list[dict[str, object]]:
+@app.get("/sessions", dependencies=[Depends(xac_thuc_api_key)])
+def danh_sach_buoi_hoc() -> list[dict[str, object]]:
     return [dict(row) for row in list_sessions()]
 
 
-@app.get("/sessions/{session_id}/attendance")
-def session_attendance(session_id: int) -> list[dict[str, object]]:
-    return attendance_report(session_id).where(lambda value: value.notna(), None).to_dict(
-        orient="records"
-    )
+@app.get(
+    "/sessions/{session_id}/attendance",
+    dependencies=[Depends(xac_thuc_api_key)],
+)
+def bao_cao_buoi_hoc(session_id: int) -> list[dict[str, object]]:
+    report = attendance_report(session_id)
+    return report.astype(object).where(report.notna(), None).to_dict(orient="records")
 
 
 @app.post("/attendance")
 def attendance(
     request: YeuCauDiemDanh,
-    x_api_key: str | None = Header(default=None),
+    _: None = Depends(xac_thuc_api_key),
 ) -> dict[str, str]:
-    if not API_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="Endpoint ghi chưa được bật vì chưa cấu hình API key.",
-        )
-    if x_api_key is None or not hmac.compare_digest(x_api_key, API_KEY):
-        raise HTTPException(status_code=401, detail="API key không hợp lệ.")
     result, message = mark_attendance(
         request.session_id, request.student_id, request.recognition_distance
     )

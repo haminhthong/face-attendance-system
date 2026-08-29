@@ -25,6 +25,10 @@ def tim_danh_tinh_tot_nhat(
     nguong_phan_biet: float,
 ) -> KetQuaSoKhop:
     """So khớp mở: gom theo sinh viên rồi áp dụng hai ngưỡng từ cấu hình."""
+    if not 0 <= nguong_khoang_cach <= 2:
+        raise ValueError("Ngưỡng khoảng cách phải nằm trong khoảng 0-2.")
+    if not 0 <= nguong_phan_biet <= 2:
+        raise ValueError("Ngưỡng phân biệt phải nằm trong khoảng 0-2.")
     if not danh_sach_mau:
         return KetQuaSoKhop(None, float("inf"), float("inf"))
 
@@ -34,7 +38,10 @@ def tim_danh_tinh_tot_nhat(
 
     theo_sinh_vien: dict[int, tuple[float, MauKhuonMat]] = {}
     for mau in danh_sach_mau:
-        khoang_cach = float(np.linalg.norm(mau.embedding - vector))
+        vector_mau = np.asarray(mau.embedding, dtype=np.float64)
+        if vector_mau.shape != (128,) or not np.isfinite(vector_mau).all():
+            raise ValueError("Embedding mẫu phải có 128 giá trị hữu hạn.")
+        khoang_cach = float(np.linalg.norm(vector_mau - vector))
         hien_tai = theo_sinh_vien.get(mau.student_id)
         if hien_tai is None or khoang_cach < hien_tai[0]:
             theo_sinh_vien[mau.student_id] = (khoang_cach, mau)

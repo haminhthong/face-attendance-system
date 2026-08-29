@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import logging
 from datetime import datetime, timedelta
 from typing import Any, Iterable
 
@@ -16,6 +17,8 @@ from .utils import (
     utc_iso,
     utc_now,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 def get_connection() -> sqlite3.Connection:
@@ -566,8 +569,9 @@ def mark_attendance(
     except sqlite3.IntegrityError:
         connection.rollback()
         return "already", "Sinh viên đã được điểm danh trong buổi này."
-    except sqlite3.Error as exc:
+    except sqlite3.Error:
         connection.rollback()
-        return "error", f"Lỗi cơ sở dữ liệu: {exc}"
+        LOGGER.exception("Không thể ghi nhận điểm danh")
+        return "error", "Không thể ghi nhận điểm danh do lỗi cơ sở dữ liệu."
     finally:
         connection.close()
