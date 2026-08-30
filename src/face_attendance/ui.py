@@ -1,3 +1,10 @@
+"""Module giao diện người dùng (User Interface) xây dựng bằng Streamlit.
+
+Cung cấp hai khu vực chính:
+1. Điểm danh trực tiếp (`render_attendance_page`): Stream video WebRTC realtime, hiển thị thông báo live status fragment.
+2. Khu vực quản trị (`render_admin_page`): Đăng ký sinh viên, quản lý môn học, buổi học, xuất báo cáo CSV và cài đặt bảo mật.
+"""
+
 from __future__ import annotations
 
 import re
@@ -34,12 +41,20 @@ from .utils import display_datetime, local_datetime, make_pin_hash, verify_pin
 
 
 def session_label(row: sqlite3.Row) -> str:
+    """Tạo chuỗi nhãn hiển thị thân thiện cho buổi học trong selectbox."""
     return (
         f"#{row['id']} · {row['course_code']} · {row['session_name']} · "
         f"{display_datetime(row['start_at_utc'])}"
     )
 
+
 def render_admin_auth() -> bool:
+    """Giao diện xác thực PIN quản trị với cơ chế chống Brute Force (tạm khóa 60 giây khi nhập sai quá 5 lần).
+
+    Returns:
+        bool: True nếu admin đã đăng nhập thành công, False nếu chưa đăng nhập hoặc đang bị khóa.
+    """
+
     stored_pin = get_setting("admin_pin_hash")
     if not stored_pin:
         st.warning("Lần chạy đầu tiên: hãy thiết lập PIN quản trị.")

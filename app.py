@@ -1,3 +1,9 @@
+"""File điểm chạy chính của ứng dụng điểm danh sinh viên bằng khuôn mặt (Streamlit Dashboard).
+
+Khởi tạo cơ sở dữ liệu SQLite, thiết lập giao diện Streamlit wide layout,
+và điều hướng giữa trang Điểm danh trực tiếp và Khu vực quản trị.
+"""
+
 import streamlit as st
 
 from face_attendance.config import (
@@ -9,10 +15,12 @@ from face_attendance.config import (
 from face_attendance.database import init_database
 from face_attendance.ui import render_admin_page, render_attendance_page
 
+# Cấu hình trang Streamlit Dashboard
 st.set_page_config(page_title=APP_TITLE, page_icon="🎓", layout="wide")
 
 
 def main() -> None:
+    """Hàm chính khởi chạy giao diện điểm danh và sidebar điều hướng."""
     init_database()
     st.title("🎓 " + APP_TITLE)
     st.sidebar.header("Điều hướng")
@@ -31,3 +39,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

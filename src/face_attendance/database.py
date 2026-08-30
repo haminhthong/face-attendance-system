@@ -1,3 +1,10 @@
+"""Module quản lý cơ sở dữ liệu SQLite và các nghiệp vụ điểm danh.
+
+Bao gồm khởi tạo schema, quản lý thông tin sinh viên, lưu trữ vector đặc trưng khuôn mặt (128D),
+quản lý môn học/danh sách lớp/buổi học, ghi nhận điểm danh có transaction cách ly,
+chính sách lưu trữ sinh trắc học (GDPR retention) và ghi nhật ký audit log.
+"""
+
 from __future__ import annotations
 
 import sqlite3
@@ -22,13 +29,26 @@ LOGGER = logging.getLogger(__name__)
 
 
 def get_connection() -> sqlite3.Connection:
+    """Tạo kết nối tới cơ sở dữ liệu SQLite với cấu hình PRAGMA an toàn đa luồng.
+
+    Khóa ngoại (Foreign Keys) và Timeout chờ ghi dữ liệu (busy_timeout = 15s)
+    được bật để đảm bảo tính toàn vẹn và chống deadlock.
+
+    Returns:
+        sqlite3.Connection: Đối tượng kết nối SQLite với row_factory dạng Row.
+    """
     connection = sqlite3.connect(DB_PATH, timeout=15, check_same_thread=False)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA busy_timeout = 15000")
     return connection
 
+
 def init_database() -> None:
+    """Khởi tạo bảng cơ sở dữ liệu, chỉ mục (indexes) và thực hiện migration nếu cần.
+
+    Bật chế độ ghi nhật ký trước (WAL mode) để tối ưu hiệu năng đọc/ghi song song.
+    """
     schema = """
     CREATE TABLE IF NOT EXISTS app_settings (
         setting_key TEXT PRIMARY KEY,
@@ -161,19 +181,24 @@ def init_database() -> None:
 
 
 def audit(connection: sqlite3.Connection, event_type: str, detail: str) -> None:
+    """Ghi lịch sử thao tác quan trọng (Audit Log) vào cơ sở dữ liệu."""
     connection.execute(
         "INSERT INTO audit_logs(event_type, event_detail, created_at_utc) VALUES (?, ?, ?)",
         (event_type, detail[:500], utc_iso()),
     )
 
+
 def get_setting(key: str) -> str | None:
+    """Đọc giá trị cấu hình hệ thống từ bảng app_settings."""
     with get_connection() as connection:
         row = connection.execute(
             "SELECT setting_value FROM app_settings WHERE setting_key = ?", (key,)
         ).fetchone()
     return str(row["setting_value"]) if row else None
 
+
 def set_setting(key: str, value: str) -> None:
+    """Ghi hoặc cập nhật giá trị cấu hình vào bảng app_settings (có ghi Audit Log)."""
     with get_connection() as connection:
         connection.execute(
             """
@@ -187,9 +212,20 @@ def set_setting(key: str, value: str) -> None:
         )
         audit(connection, "setting_updated", key)
 
+
 def upsert_student(
     student_code: str, full_name: str, class_name: str
 ) -> sqlite3.Row:
+    """Thêm mới hoặc cập nhật hồ sơ sinh viên dựa trên mã sinh viên (MSSV).
+
+    Args:
+        student_code (str): Mã sinh viên.
+        full_name (str): Họ và tên.
+        class_name (str): Tên lớp sinh hoạt.
+
+    Returns:
+        sqlite3.Row: Dòng dữ liệu sinh viên trong database.
+    """
     code = normalize_student_code(student_code)
     name = normalize_person_name(full_name)
     class_value = " ".join(class_name.strip().split())
@@ -220,6 +256,7 @@ def upsert_student(
             raise RuntimeError("Không thể tạo hồ sơ sinh viên.")
         return row
 
+
 def save_embedding(
     student_id: int,
     embedding: np.ndarray,
@@ -229,6 +266,13 @@ def save_embedding(
     face_width: int,
     face_height: int,
 ) -> bool:
+    """Lưu trữ vector đặc trưng khuôn mặt (128D BLOB) và thông số chất lượng ảnh.
+
+    Không lưu ảnh gốc để bảo vệ dữ liệu riêng tư (GDPR compliance).
+
+    Returns:
+        bool: True nếu thêm mới thành công, False nếu ảnh bị trùng sha256 hash.
+    """
     payload = sqlite3.Binary(np.asarray(embedding, dtype=np.float64).tobytes())
     with get_connection() as connection:
         try:
@@ -257,7 +301,9 @@ def save_embedding(
         except sqlite3.IntegrityError as exc:
             raise ValueError("Không thể lưu dữ liệu khuôn mặt cho sinh viên này.") from exc
 
+
 def student_table() -> pd.DataFrame:
+    """Lấy danh sách tất cả sinh viên cùng số lượng ảnh tham chiếu đã đăng ký dưới dạng DataFrame."""
     query = """
     SELECT s.id, s.student_code AS 'MSSV', s.full_name AS 'Họ tên',
            s.class_name AS 'Lớp', s.active AS 'Hoạt động',
@@ -273,7 +319,13 @@ def student_table() -> pd.DataFrame:
         frame["Hoạt động"] = frame["Hoạt động"].map({1: "Có", 0: "Không"})
     return frame
 
+
 def remove_student_biometrics(student_id: int) -> None:
+    """Xóa toàn bộ vector sinh trắc học khuôn mặt của sinh viên và đánh dấu vô hiệu hóa (active = 0).
+
+    Args:
+        student_id (int): ID của sinh viên cần thu hồi dữ liệu.
+    """
     with get_connection() as connection:
         connection.execute("DELETE FROM face_embeddings WHERE student_id = ?", (student_id,))
         connection.execute(
@@ -284,7 +336,16 @@ def remove_student_biometrics(student_id: int) -> None:
 
 
 def purge_expired_biometrics(retention_days: int = BIOMETRIC_RETENTION_DAYS) -> int:
-    """Xóa embedding quá hạn và vô hiệu hóa hồ sơ không còn embedding."""
+    """Xóa các vector khuôn mặt hết hạn lưu trữ theo chính sách bảo vệ dữ liệu (GDPR Biometrics Retention).
+
+    Tự động chuyển hồ sơ sinh viên sang trạng thái inactive nếu không còn bất kỳ vector tham chiếu nào.
+
+    Args:
+        retention_days (int): Số ngày lưu trữ tối đa (mặc định đọc từ cấu hình BIOMETRIC_RETENTION_DAYS).
+
+    Returns:
+        int: Số lượng bản ghi embedding đã bị xóa.
+    """
     if not 1 <= retention_days <= 3650:
         raise ValueError("Thời hạn lưu trữ phải nằm trong khoảng 1-3650 ngày.")
     cutoff = utc_iso(utc_now() - timedelta(days=retention_days))
@@ -307,7 +368,15 @@ def purge_expired_biometrics(retention_days: int = BIOMETRIC_RETENTION_DAYS) -> 
         audit(connection, "expired_biometrics_purged", f"deleted={deleted}")
         return deleted
 
+
 def create_course(course_code: str, course_name: str, lecturer: str) -> None:
+    """Tạo thông tin môn học mới.
+
+    Args:
+        course_code (str): Mã môn học (ví dụ: 'CS101').
+        course_name (str): Tên môn học.
+        lecturer (str): Tên giảng viên phụ trách.
+    """
     code = normalize_course_code(course_code)
     name = " ".join(course_name.strip().split())
     teacher = normalize_person_name(lecturer)
@@ -323,13 +392,17 @@ def create_course(course_code: str, course_name: str, lecturer: str) -> None:
         )
         audit(connection, "course_created", code)
 
+
 def list_courses() -> list[sqlite3.Row]:
+    """Lấy danh sách tất cả các môn học sắp xếp theo mã môn."""
     with get_connection() as connection:
         return connection.execute(
             "SELECT * FROM courses ORDER BY course_code"
         ).fetchall()
 
+
 def get_course_roster(course_id: int) -> set[int]:
+    """Lấy tập hợp các student_id thuộc danh sách môn học."""
     with get_connection() as connection:
         rows = connection.execute(
             "SELECT student_id FROM course_enrollments WHERE course_id = ?",
@@ -337,7 +410,17 @@ def get_course_roster(course_id: int) -> set[int]:
         ).fetchall()
     return {int(row["student_id"]) for row in rows}
 
+
 def set_course_roster(course_id: int, student_ids: Iterable[int]) -> int:
+    """Cập nhật danh sách sinh viên đăng ký học môn học.
+
+    Args:
+        course_id (int): ID môn học.
+        student_ids (Iterable[int]): Danh sách ID sinh viên tham gia môn học.
+
+    Returns:
+        int: Số lượng sinh viên trong danh sách sau khi cập nhật.
+    """
     normalized_ids = sorted({int(student_id) for student_id in student_ids})
     with get_connection() as connection:
         course = connection.execute(
@@ -373,6 +456,7 @@ def set_course_roster(course_id: int, student_ids: Iterable[int]) -> int:
         )
         return len(normalized_ids)
 
+
 def create_attendance_session(
     course_id: int,
     session_name: str,
@@ -380,6 +464,15 @@ def create_attendance_session(
     end_local: datetime,
     late_after_minutes: int,
 ) -> None:
+    """Tạo một buổi học điểm danh mới và snapshot danh sách sinh viên môn học vào buổi học.
+
+    Args:
+        course_id (int): ID môn học.
+        session_name (str): Tên buổi học (ví dụ: 'Buổi 01 - Tổng quan').
+        start_local (datetime): Thời gian bắt đầu buổi học (giờ địa phương).
+        end_local (datetime): Thời gian kết thúc buổi học (giờ địa phương).
+        late_after_minutes (int): Số phút cho phép sau thời gian bắt đầu trước khi tính là đi trễ.
+    """
     name = " ".join(session_name.strip().split())
     if not 1 <= len(name) <= 120:
         raise ValueError("Tên buổi học phải dài từ 1 đến 120 ký tự.")
@@ -405,6 +498,7 @@ def create_attendance_session(
             ),
         )
         session_id = int(cursor.lastrowid)
+        # Snapshot danh sách sinh viên hiện tại của môn học vào buổi học này
         connection.execute(
             """
             INSERT INTO session_enrollments(session_id, student_id, enrolled_at_utc)
@@ -416,7 +510,9 @@ def create_attendance_session(
         )
         audit(connection, "session_created", name)
 
+
 def list_sessions(status: str | None = None) -> list[sqlite3.Row]:
+    """Lấy danh sách các buổi học (tùy chọn lọc theo trạng thái 'scheduled', 'open', 'closed')."""
     query = """
     SELECT s.*, c.course_code, c.course_name, c.lecturer
     FROM attendance_sessions s
@@ -430,7 +526,9 @@ def list_sessions(status: str | None = None) -> list[sqlite3.Row]:
     with get_connection() as connection:
         return connection.execute(query, params).fetchall()
 
+
 def change_session_status(session_id: int, new_status: str) -> None:
+    """Chuyển đổi trạng thái buổi học (Scheduled -> Open -> Closed)."""
     if new_status not in {"scheduled", "open", "closed"}:
         raise ValueError("Trạng thái buổi học không hợp lệ.")
     with get_connection() as connection:
@@ -453,7 +551,18 @@ def change_session_status(session_id: int, new_status: str) -> None:
         )
         audit(connection, "session_status_changed", f"{session_id}:{new_status}")
 
+
 def attendance_report(session_id: int) -> pd.DataFrame:
+    """Tạo báo cáo điểm danh chi tiết theo buổi học dưới dạng pandas DataFrame.
+
+    Args:
+        session_id (int): ID của buổi học cần trích xuất báo cáo.
+
+    Returns:
+        pd.DataFrame: Bảng thông tin chứa MSSV, Họ tên, Lớp, Mã môn, Buổi học,
+                     Trạng thái (Có mặt/Đi trễ/Vắng), Thời gian điểm danh,
+                     Khoảng cách khuôn mặt và Ngưỡng chấp nhận.
+    """
     query = """
     SELECT st.student_code AS 'MSSV', st.full_name AS 'Họ tên',
            st.class_name AS 'Lớp', c.course_code AS 'Mã môn',
@@ -479,19 +588,36 @@ def attendance_report(session_id: int) -> pd.DataFrame:
         frame["Trạng thái"] = frame["Trạng thái"].map(
             {"present": "Có mặt", "late": "Đi trễ", "absent": "Vắng"}
         )
-        frame["Khoảng cách khuôn mặt"] = frame["Khoảng cách khuôn mặt"].round(4)
+        # Chuyển đổi an toàn sang float64 trước khi làm tròn để tránh TypeError khi có giá trị vắng mặt (None/NaN)
+        frame["Khoảng cách khuôn mặt"] = pd.to_numeric(
+            frame["Khoảng cách khuôn mặt"], errors="coerce"
+        ).round(4)
     return frame
+
 
 def mark_attendance(
     session_id: int, student_id: int, distance: float
 ) -> tuple[str, str]:
-    """Ghi một lần/buổi bằng transaction; trả về (mã kết quả, thông báo)."""
+    """Ghi nhận điểm danh cho sinh viên trong buổi học bằng ACID Transaction cách ly cao.
+
+    Sử dụng 'BEGIN IMMEDIATE' để ngăn ngừa điểm danh trùng lặp do Race Condition khi có nhiều client song song.
+    Phân loại tự động trạng thái 'Có mặt' (present) hoặc 'Đi trễ' (late) dựa trên cấu hình buổi học.
+
+    Args:
+        session_id (int): ID buổi học.
+        student_id (int): ID sinh viên.
+        distance (float): Khoảng cách khuôn mặt so với mẫu tham chiếu.
+
+    Returns:
+        tuple[str, str]: (mã_kết_quả, thông_báo_chi_tiết).
+    """
     if not np.isfinite(distance) or not 0 <= distance <= FACE_TOLERANCE:
         return "rejected", "Kết quả nhận diện không đạt ngưỡng cho phép."
 
     now = utc_now()
     connection = get_connection()
     try:
+        # Bắt đầu transaction ngay lập tức với khóa ghi (reserved lock)
         connection.execute("BEGIN IMMEDIATE")
         session = connection.execute(
             "SELECT * FROM attendance_sessions WHERE id = ?", (session_id,)
@@ -575,3 +701,4 @@ def mark_attendance(
         return "error", "Không thể ghi nhận điểm danh do lỗi cơ sở dữ liệu."
     finally:
         connection.close()
+
