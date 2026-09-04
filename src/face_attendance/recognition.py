@@ -1,9 +1,9 @@
 """Module xử lý nhận diện khuôn mặt, đăng ký mẫu tham chiếu và WebRTC Video Engine.
 
 Chịu trách nhiệm:
-1. Đăng ký & kiểm tra chất lượng ảnh sinh viên (độ mờ Laplacian, độ sáng mean, kích thước khuôn mặt, duy nhất 1 mặt).
+1. Đăng ký và kiểm tra độ mờ, độ sáng, kích thước và số khuôn mặt.
 2. Tải và quản lý bộ cache vector mẫu (FaceTemplate) theo buổi học.
-3. Engine nhận diện thời gian thực (RecognitionEngine) tích hợp skip-frame (0.25x scaling), liveness chớp mắt và xác nhận đa khung hình.
+3. Nhận diện thời gian thực, chớp mắt và xác nhận qua nhiều khung hình.
 4. Streamlit WebRTC VideoProcessor cho luồng camera trình duyệt.
 """
 
@@ -16,11 +16,14 @@ import time
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-import av
 import cv2
-import face_recognition
 import numpy as np
-from streamlit_webrtc import VideoProcessorBase
+try:
+    from streamlit_webrtc import VideoProcessorBase
+except ImportError:
+    class VideoProcessorBase:  # type: ignore[no-redef]
+        """Fallback class when streamlit_webrtc is not installed."""
+        pass
 
 from .config import (
     ATTEMPT_COOLDOWN_SECONDS,
@@ -114,6 +117,11 @@ def decode_and_validate_face(image_bytes: bytes) -> EnrollmentResult:
         )
 
     # 3. Phát hiện số lượng khuôn mặt
+    try:
+        import face_recognition
+    except ImportError as exc:
+        raise RuntimeError("Thư viện face_recognition/dlib chưa được cài đặt.") from exc
+
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     locations = face_recognition.face_locations(image_rgb, number_of_times_to_upsample=1)
     if len(locations) != 1:
@@ -159,7 +167,7 @@ def enroll_student_images(
         student_code (str): Mã sinh viên.
         full_name (str): Họ tên sinh viên.
         class_name (str): Lớp sinh hoạt.
-        image_sources (Iterable[Any]): Danh sách đối tượng chứa dữ liệu ảnh (Streamlit UploadFile / CameraInput).
+        image_sources: Danh sách ảnh tải lên hoặc ảnh chụp từ Streamlit.
 
     Returns:
         tuple[int, list[str]]: (Số ảnh đã lưu thành công, Danh sách cảnh báo/lỗi nếu có).
@@ -354,6 +362,8 @@ class RecognitionEngine:
             return self.draw_annotations(image_bgr)
 
         # Thu nhỏ khung hình 0.25x để phát hiện khuôn mặt nhanh hơn
+        import face_recognition
+
         small = cv2.resize(image_bgr, (0, 0), fx=0.25, fy=0.25)
         rgb_small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
         locations = face_recognition.face_locations(rgb_small, model="hog")
@@ -461,8 +471,10 @@ class AttendanceVideoProcessor(VideoProcessorBase):
     def __init__(self, engine: RecognitionEngine) -> None:
         self.engine = engine
 
-    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+    def recv(self, frame: Any) -> Any:
         """Hàm callback nhận khung hình video từ WebRTC streamer."""
+        import av
+
         image = frame.to_ndarray(format="bgr24")
         try:
             output = self.engine.process(image)
@@ -471,4 +483,3 @@ class AttendanceVideoProcessor(VideoProcessorBase):
             self.engine.set_event("error", "Không thể xử lý hình ảnh từ camera.")
             output = image
         return av.VideoFrame.from_ndarray(output, format="bgr24")
-

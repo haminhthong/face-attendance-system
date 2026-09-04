@@ -48,7 +48,7 @@ def tim_danh_tinh_tot_nhat(
         embedding (np.ndarray): Vector khuôn mặt đầu vào (128 chiều).
         danh_sach_mau (Sequence[MauKhuonMat]): Danh sách tất cả ảnh mẫu tham chiếu.
         nguong_khoang_cach (float): Khoảng cách L2 tối đa chấp nhận (FACE_TOLERANCE).
-        nguong_phan_biet (float): Độ chênh lệch tối thiểu giữa ứng viên #1 và #2 (MIN_IDENTITY_MARGIN).
+        nguong_phan_biet: Chênh lệch tối thiểu giữa hai ứng viên đầu.
 
     Returns:
         KetQuaSoKhop: Đối tượng chứa thông tin danh tính khớp nhất hoặc None nếu bị từ chối.
@@ -67,7 +67,7 @@ def tim_danh_tinh_tot_nhat(
     if vector.shape != (128,) or not np.isfinite(vector).all():
         raise ValueError("Embedding đầu vào phải có 128 giá trị hữu hạn.")
 
-    # Gom nhóm theo sinh viên: lấy khoảng cách L2 nhỏ nhất trong số các ảnh tham chiếu của cùng 1 sinh viên
+    # Mỗi sinh viên có nhiều ảnh; chỉ giữ khoảng cách L2 tốt nhất của người đó.
     theo_sinh_vien: dict[int, tuple[float, MauKhuonMat]] = {}
     for mau in danh_sach_mau:
         vector_mau = np.asarray(mau.embedding, dtype=np.float64)
@@ -95,4 +95,3 @@ def tim_danh_tinh_tot_nhat(
         mau_tot_nhat = None
 
     return KetQuaSoKhop(mau_tot_nhat, khoang_cach_tot_nhat, do_phan_biet)
-

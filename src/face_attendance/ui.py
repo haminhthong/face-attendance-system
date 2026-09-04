@@ -1,8 +1,8 @@
 """Module giao diện người dùng (User Interface) xây dựng bằng Streamlit.
 
 Cung cấp hai khu vực chính:
-1. Điểm danh trực tiếp (`render_attendance_page`): Stream video WebRTC realtime, hiển thị thông báo live status fragment.
-2. Khu vực quản trị (`render_admin_page`): Đăng ký sinh viên, quản lý môn học, buổi học, xuất báo cáo CSV và cài đặt bảo mật.
+1. Điểm danh trực tiếp bằng video WebRTC.
+2. Quản trị sinh viên, môn học, buổi học, báo cáo và bảo mật.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from typing import Any
 import streamlit as st
 from streamlit_webrtc import WebRtcMode, webrtc_streamer
 
-from .config import APP_TITLE, CONFIRMATION_FRAMES, FACE_TOLERANCE, PROCESS_EVERY_N_FRAMES
+from .config import FACE_TOLERANCE
 from .database import (
     attendance_report,
     change_session_status,
@@ -49,7 +49,7 @@ def session_label(row: sqlite3.Row) -> str:
 
 
 def render_admin_auth() -> bool:
-    """Giao diện xác thực PIN quản trị với cơ chế chống Brute Force (tạm khóa 60 giây khi nhập sai quá 5 lần).
+    """Xác thực PIN và tạm khóa 60 giây sau năm lần nhập sai.
 
     Returns:
         bool: True nếu admin đã đăng nhập thành công, False nếu chưa đăng nhập hoặc đang bị khóa.

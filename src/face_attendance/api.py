@@ -6,25 +6,37 @@ Cung cấp các endpoint tích hợp dịch vụ:
 - Báo cáo kết quả điểm danh (/sessions/{session_id}/attendance).
 - Ghi nhận điểm danh (/attendance).
 
-Bảo mật bằng Header X-API-Key với cơ chế so sánh hằng số thời gian chống Timing Attack.
+Bảo mật bằng Header X-API-Key với cơ chế so sánh hằng số thời gian secrets.compare_digest chống Timing Attack.
 """
 
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-import hmac
+import logging
+import secrets
+from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from .config import API_KEY
+from . import __version__
+from .application import process_attendance_record
+from .config import API_KEY, FACE_TOLERANCE
 from .database import (
     attendance_report,
     init_database,
     list_sessions,
-    mark_attendance,
     purge_expired_biometrics,
 )
+from .domain import (
+    AttendanceError,
+    DuplicateAttendanceError,
+    SessionClosedError,
+    StudentNotInRosterError,
+)
+
+LOGGER = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -37,10 +49,22 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title="Face Attendance API",
-    version="1.1.0",
+    version=__version__,
     description="RESTful API nghiệp vụ cho hệ thống điểm danh sinh viên bằng khuôn mặt.",
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Bắt và ẩn các ngoại lệ nội bộ không mong muốn, tránh lộ stack trace/đường dẫn nội bộ."""
+    if isinstance(exc, HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    LOGGER.exception("Lỗi hệ thống không xử lý được tại endpoint %s", request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Đã xảy ra lỗi hệ thống. Vui lòng thử lại sau."},
+    )
 
 
 class YeuCauDiemDanh(BaseModel):
@@ -49,14 +73,14 @@ class YeuCauDiemDanh(BaseModel):
     session_id: int = Field(gt=0, description="ID của buổi học đang mở điểm danh")
     student_id: int = Field(gt=0, description="ID sinh viên được nhận diện")
     recognition_distance: float = Field(
-        ge=0, le=1, description="Khoảng cách khuôn mặt Euclidean (<= FACE_TOLERANCE)"
+        ge=0.0, le=2.0, description="Khoảng cách khuôn mặt Euclidean L2"
     )
 
 
 def xac_thuc_api_key(x_api_key: str | None = Header(default=None)) -> None:
     """Dependency xác thực API Key từ Header 'X-API-Key'.
 
-    Sử dụng hmac.compare_digest để chống tấn công Timing Attack.
+    Sử dụng secrets.compare_digest để chống tấn công Timing Attack.
 
     Raises:
         HTTPException(503): Nếu chưa cấu hình biến môi trường FACE_ATTENDANCE_API_KEY.
@@ -67,7 +91,7 @@ def xac_thuc_api_key(x_api_key: str | None = Header(default=None)) -> None:
             status_code=503,
             detail="API chưa được bật vì chưa cấu hình khóa truy cập (FACE_ATTENDANCE_API_KEY).",
         )
-    if x_api_key is None or not hmac.compare_digest(x_api_key, API_KEY):
+    if x_api_key is None or not secrets.compare_digest(x_api_key, API_KEY):
         raise HTTPException(status_code=401, detail="Khóa API không hợp lệ.")
 
 
@@ -77,7 +101,11 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/sessions", dependencies=[Depends(xac_thuc_api_key)], summary="Lấy danh sách các buổi học")
+@app.get(
+    "/sessions",
+    dependencies=[Depends(xac_thuc_api_key)],
+    summary="Lấy danh sách các buổi học",
+)
 def danh_sach_buoi_hoc() -> list[dict[str, object]]:
     """Trả về danh sách tất cả các buổi học kèm thông tin môn học và trạng thái."""
     return [dict(row) for row in list_sessions()]
@@ -89,7 +117,7 @@ def danh_sach_buoi_hoc() -> list[dict[str, object]]:
     summary="Trích xuất báo cáo điểm danh của một buổi học",
 )
 def bao_cao_buoi_hoc(session_id: int) -> list[dict[str, object]]:
-    """Trả về danh sách sinh viên kèm trạng thái 'Có mặt', 'Đi trễ', 'Vắng' và khoảng cách nhận diện."""
+    """Trả về sinh viên, trạng thái điểm danh và khoảng cách nhận diện."""
     report = attendance_report(session_id)
     return report.astype(object).where(report.notna(), None).to_dict(orient="records")
 
@@ -98,14 +126,21 @@ def bao_cao_buoi_hoc(session_id: int) -> list[dict[str, object]]:
 def attendance(
     request: YeuCauDiemDanh,
     _: None = Depends(xac_thuc_api_key),
-) -> dict[str, str]:
-    """Thực hiện transaction ghi nhận điểm danh có kiểm tra thời gian và giới hạn 1 lần/buổi."""
-    result, message = mark_attendance(
-        request.session_id, request.student_id, request.recognition_distance
-    )
-    if result in {"error", "rejected"}:
-        raise HTTPException(status_code=422, detail=message)
-    if result in {"closed", "inactive", "outside"}:
-        raise HTTPException(status_code=409, detail=message)
-    return {"result": result, "message": message}
-
+) -> dict[str, Any]:
+    """Thực hiện transaction ghi nhận điểm danh trả về định dạng chuẩn hóa."""
+    try:
+        res = process_attendance_record(
+            session_id=request.session_id,
+            student_id=request.student_id,
+            distance=request.recognition_distance,
+            tolerance=FACE_TOLERANCE,
+        )
+        return res.to_dict()
+    except DuplicateAttendanceError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except SessionClosedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except StudentNotInRosterError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except AttendanceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

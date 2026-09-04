@@ -138,6 +138,8 @@ venv.bak/
 
 # Dữ liệu sinh trắc học và cơ sở dữ liệu cục bộ
 face_attendance_data/
+data/private/
+data/results/
 *.db
 *.db-shm
 *.db-wal

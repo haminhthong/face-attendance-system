@@ -1,0 +1,37 @@
+"""Service đăng ký và quản lý mẫu khuôn mặt sinh viên (Enrollment Application Service)."""
+
+from __future__ import annotations
+
+from typing import Any, Iterable
+
+from ..recognition import enroll_student_images
+from ..utils import normalize_person_name, normalize_student_code
+
+
+def process_student_enrollment(
+    student_code: str,
+    full_name: str,
+    class_name: str,
+    image_sources: Iterable[Any],
+) -> tuple[int, list[str]]:
+    """Chuẩn hóa dữ liệu đầu vào và đăng ký sinh viên kèm ảnh mẫu.
+
+    Args:
+        student_code: Mã sinh viên.
+        full_name: Họ tên sinh viên.
+        class_name: Tên lớp sinh hoạt.
+        image_sources: Danh sách dữ liệu ảnh nhị phân hoặc file-like objects.
+
+    Returns:
+        tuple[int, list[str]]: (Số ảnh mẫu đã đăng ký thành công, Cảnh báo/lỗi nếu có).
+    """
+    clean_code = normalize_student_code(student_code)
+    clean_name = normalize_person_name(full_name)
+    clean_class = class_name.strip()
+
+    return enroll_student_images(
+        student_code=clean_code,
+        full_name=clean_name,
+        class_name=clean_class,
+        image_sources=image_sources,
+    )

@@ -13,6 +13,8 @@ import re
 import secrets
 from datetime import date, datetime, time as dt_time, timezone
 
+import numpy as np
+
 from .config import COURSE_CODE_PATTERN, PIN_ITERATIONS, STUDENT_CODE_PATTERN, VN_TZ
 
 
@@ -40,7 +42,7 @@ def local_datetime(day: date, clock: dt_time) -> datetime:
 
 
 def display_datetime(value: str | None) -> str:
-    """Chuyển chuỗi ISO 8601 UTC sang định dạng hiển thị người dùng (DD/MM/YYYY HH:MM:SS) theo giờ Việt Nam.
+    """Đổi chuỗi ISO 8601 UTC sang ngày giờ Việt Nam để hiển thị.
 
     Args:
         value (str | None): Chuỗi thời gian ISO UTC từ DB.
@@ -115,7 +117,7 @@ def normalize_person_name(value: str) -> str:
     if not (2 <= len(name) <= 100):
         raise ValueError("Họ tên phải dài từ 2 đến 100 ký tự.")
     allowed_punctuation = {" ", "-", "'", "."}
-    if not all(ch.isalpha() or ch in allowed_punctuation for ch in name):
+    if not all(ch.isalnum() or ch in allowed_punctuation for ch in name):
         raise ValueError("Họ tên chứa ký tự không hợp lệ.")
     return name
 
@@ -171,4 +173,37 @@ def verify_pin(pin: str, stored_value: str) -> bool:
         return hmac.compare_digest(actual, expected)
     except (ValueError, TypeError):
         return False
+
+
+def prepare_face_embedding(
+    image_rgb: np.ndarray,
+    detection_model: str = "hog",
+    num_jitters: int = 1,
+) -> np.ndarray | None:
+    """Pipeline chuẩn hóa trích xuất vector khuôn mặt 128D cho cả đăng ký, kiểm thử và realtime.
+
+    Args:
+        image_rgb (np.ndarray): Ảnh RGB numpy array.
+        detection_model (str): Mô hình phát hiện ('hog' hoặc 'cnn').
+        num_jitters (int): Số lần biến đổi jitter để tăng độ chính xác vector.
+
+    Returns:
+        np.ndarray | None: Vector 128D hoặc None nếu không phát hiện duy nhất 1 khuôn mặt.
+    """
+    import face_recognition
+
+    locations = face_recognition.face_locations(
+        image_rgb,
+        model=detection_model,
+    )
+
+    if len(locations) != 1:
+        return None
+
+    encodings = face_recognition.face_encodings(
+        image_rgb,
+        known_face_locations=locations,
+        num_jitters=num_jitters,
+    )
+    return np.asarray(encodings[0], dtype=np.float64) if encodings else None
 

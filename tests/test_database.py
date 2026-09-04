@@ -2,13 +2,15 @@ from datetime import timedelta
 
 import numpy as np
 
-from face_attendance import database
+from face_attendance import config, database
 from face_attendance.utils import utc_iso, utc_now
 
 
 def tao_du_lieu_buoi_hoc(tmp_path, monkeypatch) -> tuple[int, int]:
     """Tạo dữ liệu tối thiểu cho các test nghiệp vụ điểm danh."""
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "test.db")
+    test_db = tmp_path / "test.db"
+    monkeypatch.setattr(config, "DB_PATH", test_db)
+    monkeypatch.setattr(database, "DB_PATH", test_db)
     database.init_database()
 
     student = database.upsert_student("SV001", "Nguyễn Văn An", "K23")
@@ -52,7 +54,9 @@ def test_session_roster_is_a_snapshot(tmp_path, monkeypatch) -> None:
 
 
 def test_expired_embedding_is_removed(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "test.db")
+    test_db = tmp_path / "test.db"
+    monkeypatch.setattr(config, "DB_PATH", test_db)
+    monkeypatch.setattr(database, "DB_PATH", test_db)
     database.init_database()
     student = database.upsert_student("SV001", "Nguyễn Văn An", "K23")
     student_id = int(student["id"])
@@ -83,7 +87,9 @@ def test_expired_embedding_is_removed(tmp_path, monkeypatch) -> None:
 
 def test_attendance_report_handles_absent_students(tmp_path, monkeypatch) -> None:
     """Kiểm tra báo cáo điểm danh xử lý chính xác cả sinh viên có mặt lẫn sinh viên vắng mặt mà không gây lỗi kiểu dữ liệu."""
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "test.db")
+    test_db = tmp_path / "test.db"
+    monkeypatch.setattr(config, "DB_PATH", test_db)
+    monkeypatch.setattr(database, "DB_PATH", test_db)
     database.init_database()
     st1 = database.upsert_student("SV001", "Nguyễn Văn An", "K23")
     st2 = database.upsert_student("SV002", "Trần Thị Bích", "K23")

@@ -18,13 +18,13 @@ def ti_le_mat(points: list[tuple[int, int]]) -> float | None:
     Công thức:
         EAR = (||p2 - p6|| + ||p3 - p5||) / (2 * ||p1 - p4||)
 
-    Trong đó p1..p6 là 6 điểm mốc bao quanh mắt (p1, p4 là 2 góc mắt; p2, p3, p5, p6 là viền trên/dưới).
+    Sáu điểm mốc gồm hai góc mắt và bốn điểm ở viền trên/dưới.
 
     Args:
         points (list[tuple[int, int]]): Danh sách 6 tọa độ (x, y) của một mắt.
 
     Returns:
-        float | None: Giá trị EAR (thường nằm trong khoảng 0.15 - 0.35) hoặc None nếu dữ liệu không hợp lệ.
+        Giá trị EAR hoặc None nếu dữ liệu không hợp lệ.
     """
     if len(points) != 6:
         return None
@@ -46,9 +46,9 @@ class BoKiemTraChopMat:
     Attributes:
         nguong_nham (float): Ngưỡng EAR coi là nhắm mắt (ví dụ: <= 0.19).
         nguong_mo (float): Ngưỡng EAR coi là mở mắt (ví dụ: >= 0.23).
-        thoi_han_giay (float): Thời gian trạng thái liveness có hiệu lực sau khi xác minh thành công (TTL).
+        thoi_han_giay: Thời gian xác minh còn hiệu lực.
         trang_thai (dict[int, str]): Lưu trữ trạng thái hiện tại của từng student_id.
-        da_xac_minh_luc (dict[int, float]): Lưu thời điểm (monotonic time) xác minh liveness thành công.
+        da_xac_minh_luc: Thời điểm xác minh thành công theo đồng hồ monotonic.
     """
 
     nguong_nham: float
@@ -70,7 +70,7 @@ class BoKiemTraChopMat:
         Luồng chuyển trạng thái:
         1. `can_mo`: Chờ mắt mở (EAR >= nguong_mo) -> chuyển sang `can_nham`.
         2. `can_nham`: Chờ nhắm mắt (EAR <= nguong_nham) -> chuyển sang `can_mo_lai`.
-        3. `can_mo_lai`: Chờ mở mắt lại (EAR >= nguong_mo) -> chuyển sang `da_xac_minh` và ghi nhận timestamp.
+        3. `can_mo_lai`: Chờ mở mắt để hoàn tất xác minh.
         4. `da_xac_minh`: Đã xác minh thành công. Reset về `can_mo` khi hết thời hạn (TTL).
 
         Args:
@@ -104,7 +104,6 @@ class BoKiemTraChopMat:
         return trang_thai == "da_xac_minh"
 
     def dat_lai(self, student_id: int) -> None:
-        """Xóa trạng thái và thông tin xác minh của sinh viên (khi khuôn mặt rời khỏi khung hình)."""
+        """Xóa trạng thái khi khuôn mặt rời khỏi khung hình."""
         self.trang_thai.pop(student_id, None)
         self.da_xac_minh_luc.pop(student_id, None)
-

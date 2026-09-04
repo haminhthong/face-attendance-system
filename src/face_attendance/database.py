@@ -15,6 +15,7 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
+from . import config
 from .config import BIOMETRIC_RETENTION_DAYS, DB_PATH, FACE_TOLERANCE
 from .utils import (
     display_datetime,
@@ -37,7 +38,8 @@ def get_connection() -> sqlite3.Connection:
     Returns:
         sqlite3.Connection: Đối tượng kết nối SQLite với row_factory dạng Row.
     """
-    connection = sqlite3.connect(DB_PATH, timeout=15, check_same_thread=False)
+    LOGGER.debug("GET_CONN DB_PATH=%s", config.DB_PATH)
+    connection = sqlite3.connect(config.DB_PATH, timeout=15, check_same_thread=False)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA busy_timeout = 15000")
@@ -49,6 +51,7 @@ def init_database() -> None:
 
     Bật chế độ ghi nhật ký trước (WAL mode) để tối ưu hiệu năng đọc/ghi song song.
     """
+    config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     schema = """
     CREATE TABLE IF NOT EXISTS app_settings (
         setting_key TEXT PRIMARY KEY,
@@ -303,7 +306,7 @@ def save_embedding(
 
 
 def student_table() -> pd.DataFrame:
-    """Lấy danh sách tất cả sinh viên cùng số lượng ảnh tham chiếu đã đăng ký dưới dạng DataFrame."""
+    """Lấy danh sách sinh viên và số ảnh tham chiếu dưới dạng DataFrame."""
     query = """
     SELECT s.id, s.student_code AS 'MSSV', s.full_name AS 'Họ tên',
            s.class_name AS 'Lớp', s.active AS 'Hoạt động',
@@ -320,11 +323,12 @@ def student_table() -> pd.DataFrame:
     return frame
 
 
-def remove_student_biometrics(student_id: int) -> None:
-    """Xóa toàn bộ vector sinh trắc học khuôn mặt của sinh viên và đánh dấu vô hiệu hóa (active = 0).
+def remove_student_biometrics(student_id: int, audit_event: str = "student_biometrics_removed") -> None:
+    """Xóa vector khuôn mặt và vô hiệu hóa sinh viên.
 
     Args:
         student_id (int): ID của sinh viên cần thu hồi dữ liệu.
+        audit_event (str): Tên sự kiện ghi vào audit log.
     """
     with get_connection() as connection:
         connection.execute("DELETE FROM face_embeddings WHERE student_id = ?", (student_id,))
@@ -332,16 +336,31 @@ def remove_student_biometrics(student_id: int) -> None:
             "UPDATE students SET active = 0, updated_at_utc = ? WHERE id = ?",
             (utc_iso(), student_id),
         )
-        audit(connection, "student_biometrics_removed", f"student_id={student_id}")
+        audit(connection, audit_event, f"student_id={student_id}")
+
+
+def revoke_student_consent(student_id: int) -> None:
+    """Rút lại quyền sử dụng dữ liệu sinh trắc học của sinh viên.
+
+    Hành động:
+    1. Xóa toàn bộ vector đặc trưng khuôn mặt khỏi face_embeddings.
+    2. Chuyển sinh viên sang trạng thái active = 0.
+    3. Ghi audit log 'consent_revoked'.
+    4. Giữ nguyên lịch sử các bản ghi điểm danh quá khứ (không xóa bảng attendance).
+
+    Args:
+        student_id (int): ID sinh viên.
+    """
+    remove_student_biometrics(student_id, audit_event="consent_revoked")
 
 
 def purge_expired_biometrics(retention_days: int = BIOMETRIC_RETENTION_DAYS) -> int:
-    """Xóa các vector khuôn mặt hết hạn lưu trữ theo chính sách bảo vệ dữ liệu (GDPR Biometrics Retention).
+    """Xóa vector khuôn mặt đã hết thời hạn lưu trữ.
 
-    Tự động chuyển hồ sơ sinh viên sang trạng thái inactive nếu không còn bất kỳ vector tham chiếu nào.
+    Sinh viên không còn vector tham chiếu sẽ được chuyển sang trạng thái không hoạt động.
 
     Args:
-        retention_days (int): Số ngày lưu trữ tối đa (mặc định đọc từ cấu hình BIOMETRIC_RETENTION_DAYS).
+        retention_days: Số ngày lưu tối đa, mặc định đọc từ cấu hình.
 
     Returns:
         int: Số lượng bản ghi embedding đã bị xóa.
@@ -588,7 +607,7 @@ def attendance_report(session_id: int) -> pd.DataFrame:
         frame["Trạng thái"] = frame["Trạng thái"].map(
             {"present": "Có mặt", "late": "Đi trễ", "absent": "Vắng"}
         )
-        # Chuyển đổi an toàn sang float64 trước khi làm tròn để tránh TypeError khi có giá trị vắng mặt (None/NaN)
+        # Ép kiểu trước khi làm tròn vì sinh viên vắng có giá trị None/NaN.
         frame["Khoảng cách khuôn mặt"] = pd.to_numeric(
             frame["Khoảng cách khuôn mặt"], errors="coerce"
         ).round(4)
@@ -600,7 +619,7 @@ def mark_attendance(
 ) -> tuple[str, str]:
     """Ghi nhận điểm danh cho sinh viên trong buổi học bằng ACID Transaction cách ly cao.
 
-    Sử dụng 'BEGIN IMMEDIATE' để ngăn ngừa điểm danh trùng lặp do Race Condition khi có nhiều client song song.
+    Dùng BEGIN IMMEDIATE để chống ghi trùng khi nhiều client chạy song song.
     Phân loại tự động trạng thái 'Có mặt' (present) hoặc 'Đi trễ' (late) dựa trên cấu hình buổi học.
 
     Args:
@@ -611,7 +630,7 @@ def mark_attendance(
     Returns:
         tuple[str, str]: (mã_kết_quả, thông_báo_chi_tiết).
     """
-    if not np.isfinite(distance) or not 0 <= distance <= FACE_TOLERANCE:
+    if not np.isfinite(distance) or not 0 <= distance <= config.FACE_TOLERANCE:
         return "rejected", "Kết quả nhận diện không đạt ngưỡng cho phép."
 
     now = utc_now()
@@ -701,4 +720,3 @@ def mark_attendance(
         return "error", "Không thể ghi nhận điểm danh do lỗi cơ sở dữ liệu."
     finally:
         connection.close()
-

@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt pyproject.toml ./
 COPY src ./src
 COPY app.py ./
-RUN pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir .
+RUN pip install --no-cache-dir -r requirements.txt
 
 EXPOSE 8501
 CMD ["streamlit", "run", "app.py", "--server.address=0.0.0.0"]

@@ -13,16 +13,30 @@ from zoneinfo import ZoneInfo
 
 # Thông tin cơ bản ứng dụng & Bảo mật API
 APP_TITLE = "Hệ thống Điểm danh Sinh viên bằng Khuôn mặt"
+APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
 API_KEY = os.getenv("FACE_ATTENDANCE_API_KEY", "").strip()
+
+if APP_ENV == "production":
+    if not API_KEY or API_KEY in {"change-me", "replace-with-a-long-random-secret", "default"}:
+        raise RuntimeError(
+            "Ứng dụng từ chối khởi chạy ở môi trường Production vì chưa cấu hình khóa FACE_ATTENDANCE_API_KEY bảo mật."
+        )
+
 VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
 # Đường dẫn lưu trữ dữ liệu ứng dụng & SQLite database
 BASE_DIR = Path(__file__).resolve().parents[2]
-DATA_DIR = Path(
-    os.getenv("FACE_ATTENDANCE_DATA_DIR", str(BASE_DIR / "face_attendance_data"))
-).expanduser().resolve()
+custom_db = os.getenv("DATABASE_PATH", "").strip()
+if custom_db:
+    DB_PATH = Path(custom_db).expanduser().resolve()
+    DATA_DIR = DB_PATH.parent
+else:
+    DATA_DIR = Path(
+        os.getenv("FACE_ATTENDANCE_DATA_DIR", str(BASE_DIR / "face_attendance_data"))
+    ).expanduser().resolve()
+    DB_PATH = DATA_DIR / "face_attendance.db"
+
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-DB_PATH = DATA_DIR / "face_attendance.db"
 
 
 def _env_float(name: str, default: float, minimum: float, maximum: float) -> float:
@@ -71,10 +85,12 @@ def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
 
 # Tham số thuật toán nhận diện khuôn mặt (Open-Set Recognition)
 FACE_TOLERANCE = _env_float("FACE_TOLERANCE", 0.50, 0.10, 1.00)  # Ngưỡng khoảng cách L2 tối đa
-MIN_IDENTITY_MARGIN = _env_float("MIN_IDENTITY_MARGIN", 0.05, 0.00, 1.00)  # Chênh lệch Top-1 vs Top-2
+# Chênh lệch tối thiểu giữa ứng viên tốt nhất và ứng viên đứng thứ hai.
+MIN_IDENTITY_MARGIN = _env_float("MIN_IDENTITY_MARGIN", 0.05, 0.00, 1.00)
 
 # Cấu hình xử lý camera WebRTC & Xác nhận đa khung hình
-PROCESS_EVERY_N_FRAMES = _env_int("PROCESS_EVERY_N_FRAMES", 3, 1, 60)  # Tần suất skip frame tối ưu FPS
+# Bỏ qua một số khung hình để cân bằng độ trễ và mức sử dụng CPU.
+PROCESS_EVERY_N_FRAMES = _env_int("PROCESS_EVERY_N_FRAMES", 3, 1, 60)
 CONFIRMATION_FRAMES = _env_int("CONFIRMATION_FRAMES", 3, 1, 60)  # Số frame liên tiếp giữ ổn định
 
 # Cấu hình kiểm tra chất lượng ảnh đầu vào (Quality Control)
@@ -91,10 +107,12 @@ BLINK_VERIFICATION_SECONDS = 10.0  # Thời hạn hiệu lực trạng thái liv
 ATTEMPT_COOLDOWN_SECONDS = 8.0  # Cooldown giữa các lần thử ghi nhận điểm danh (giây)
 
 # Chính sách lưu trữ dữ liệu sinh trắc học & Mã hóa PIN
-BIOMETRIC_RETENTION_DAYS = _env_int("BIOMETRIC_RETENTION_DAYS", 365, 1, 3650)  # Thời hạn lưu embedding (ngày)
+# Thời hạn lưu embedding trước khi tác vụ dọn dữ liệu xóa bản ghi.
+BIOMETRIC_RETENTION_DAYS = _env_int(
+    "BIOMETRIC_RETENTION_DAYS", 365, 1, 3650
+)
 PIN_ITERATIONS = 240_000  # Số vòng lặp PBKDF2-HMAC-SHA256 băm PIN
 
 # Regex kiểm tra định dạng dữ liệu đầu vào
 STUDENT_CODE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{3,30}$")
 COURSE_CODE_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{2,30}$")
-
